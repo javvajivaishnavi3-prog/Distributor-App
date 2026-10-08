@@ -173,25 +173,28 @@ def read_single_abs_file(file_path):
         # Ensure all column names are plain strings
         df.columns = [str(c).strip() for c in df.columns]
 
-        # Header adjustment safely treating cells as strings
-        for idx in range(min(5, len(df))):
-            row_vals = [str(v).strip() for v in df.iloc[idx].values if pd.notna(v) and str(v).strip() != ""]
-            row_str = " ".join(row_vals).lower()
-            if any(
-                k in row_str
-                for k in [
-                    "part",
-                    "code",
-                    "item",
-                    "description",
-                    "distributor",
-                    "vendor",
-                ]
-            ):
-                if idx > 0:
+        # Smart Header row detection: only promote row if columns are currently generic 'Unnamed'
+        is_unnamed = any("unnamed" in str(c).lower() for c in df.columns)
+        if is_unnamed:
+            for idx in range(min(5, len(df))):
+                row_vals = [str(v).strip() for v in df.iloc[idx].values if pd.notna(v) and str(v).strip() != ""]
+                row_str = " ".join(row_vals).lower()
+                if any(
+                    k in row_str
+                    for k in [
+                        "part",
+                        "code",
+                        "item",
+                        "description",
+                        "distributor",
+                        "vendor",
+                        "particulars",
+                        "name",
+                    ]
+                ):
                     df.columns = [str(v).strip() for v in df.iloc[idx].values]
                     df = df.iloc[idx + 1 :].reset_index(drop=True)
-                break
+                    break
 
         df.columns = [str(c).strip() for c in df.columns]
 
@@ -383,14 +386,35 @@ if not raw_parts_df.empty:
             "PART_NUMBER",
             "PARTNO",
             "SKU",
+            "NO",
+            "SERIAL",
         ],
     )
     col_pname = get_col_by_exact_or_alias(
         raw_parts_df,
-        ["PART NAME", "DESCRIPTION", "ITEM NAME", "TITLE", "PART_NAME", "NAME"],
+        [
+            "PART NAME",
+            "DESCRIPTION",
+            "ITEM NAME",
+            "TITLE",
+            "PART_NAME",
+            "NAME",
+            "PART",
+            "PARTICULARS",
+            "PRODUCT",
+            "ITEM",
+            "DISCRIPTION",
+            "ARTICLE",
+            "DETAILS",
+            "SPECIFICATION",
+        ],
     )
+    # Fallback to 1st column if no part name column match was found
+    if not col_pname and len(raw_parts_df.columns) > 0:
+        col_pname = str(raw_parts_df.columns[0])
+
     col_pbrand = get_col_by_exact_or_alias(
-        raw_parts_df, ["BRAND", "MAKE", "TAX:PRODUCT_BRAND"]
+        raw_parts_df, ["BRAND", "MAKE", "TAX:PRODUCT_BRAND", "MANUFACTURER", "CAR"]
     )
     col_pdist = (
         get_col_by_exact_or_alias(
@@ -414,13 +438,13 @@ if not raw_parts_df.empty:
         raw_parts_df, ["TYPE", "PART TYPE", "ITEM_TYPE", "QUALITY"]
     )
 
-    p_names = raw_parts_df[col_pname].astype(str).str.strip() if col_pname else pd.Series([""] * len(raw_parts_df))
-    p_nums = raw_parts_df[col_pnum].astype(str).str.strip() if col_pnum else pd.Series([""] * len(raw_parts_df))
+    p_names = raw_parts_df[col_pname].astype(str).str.strip() if col_pname and col_pname in raw_parts_df else pd.Series([""] * len(raw_parts_df))
+    p_nums = raw_parts_df[col_pnum].astype(str).str.strip() if col_pnum and col_pnum in raw_parts_df else pd.Series([""] * len(raw_parts_df))
 
-    # Smart Part Number Fallback: if Part Number column is empty, fallback to N/A or derive from Part Name
+    # Smart Part Number Fallback
     final_pnum = []
     for num, name in zip(p_nums, p_names):
-        if num and num.lower() not in ["nan", "none", "n/a"]:
+        if num and num.lower() not in ["nan", "none", "n/a", ""]:
             final_pnum.append(num)
         elif name:
             final_pnum.append("N/A")
@@ -429,17 +453,17 @@ if not raw_parts_df.empty:
 
     parts_df["PART NUMBER"] = final_pnum
     parts_df["PART NAME"] = p_names
-    parts_df["BRAND"] = raw_parts_df[col_pbrand].astype(str).str.strip() if col_pbrand else "Generic"
+    parts_df["BRAND"] = raw_parts_df[col_pbrand].astype(str).str.strip() if col_pbrand and col_pbrand in raw_parts_df else ""
     parts_df["DISTRIBUTOR NAME"] = (
         raw_parts_df[col_pdist].astype(str).str.strip()
         if col_pdist in raw_parts_df.columns
         else ""
     )
-    parts_df["LOCATION"] = raw_parts_df[col_ploc].astype(str).str.strip() if col_ploc else ""
-    parts_df["CONTACT"] = raw_parts_df[col_pcontact].astype(str).str.strip() if col_pcontact else ""
-    parts_df["PART ORIGIN"] = raw_parts_df[col_porigin].astype(str).str.strip() if col_porigin else ""
-    parts_df["CATEGORY"] = raw_parts_df[col_pcat].astype(str).str.strip() if col_pcat else ""
-    parts_df["PART TYPE"] = raw_parts_df[col_ptype].astype(str).str.strip() if col_ptype else ""
+    parts_df["LOCATION"] = raw_parts_df[col_ploc].astype(str).str.strip() if col_ploc and col_ploc in raw_parts_df else ""
+    parts_df["CONTACT"] = raw_parts_df[col_pcontact].astype(str).str.strip() if col_pcontact and col_pcontact in raw_parts_df else ""
+    parts_df["PART ORIGIN"] = raw_parts_df[col_porigin].astype(str).str.strip() if col_porigin and col_porigin in raw_parts_df else ""
+    parts_df["CATEGORY"] = raw_parts_df[col_pcat].astype(str).str.strip() if col_pcat and col_pcat in raw_parts_df else ""
+    parts_df["PART TYPE"] = raw_parts_df[col_ptype].astype(str).str.strip() if col_ptype and col_ptype in raw_parts_df else ""
 
     def enrich_single_dict(row_dict):
         dist_key = clean_key(row_dict["DISTRIBUTOR NAME"])
