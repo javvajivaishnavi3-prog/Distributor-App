@@ -1,7 +1,6 @@
 import io
 import os
 import re
-import sys
 import pandas as pd
 import streamlit as st
 
@@ -121,32 +120,35 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-# Base directory relative resolution for Streamlit Cloud
 BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 
 
 def clean_key(val):
-    if not val or pd.isna(val):
+    if val is None or pd.isna(val):
         return ""
     return re.sub(r"[^a-z0-9]", "", str(val).lower())
 
 
 def split_multivalue_string(text):
-    if not text or pd.isna(text) or str(text).lower() in ["n/a", "nan", "none", ""]:
+    if text is None or pd.isna(text):
         return []
-    items = re.split(r"[,|/;\n]+", str(text))
+    s = str(text).strip()
+    if s.lower() in ["n/a", "nan", "none", ""]:
+        return []
+    items = re.split(r"[,|/;\n]+", s)
     return [item.strip() for item in items if item.strip()]
 
 
 def get_col_by_exact_or_alias(df, possible_names):
     if df.empty:
         return None
+    cols = [str(c) for c in df.columns]
     for target in possible_names:
-        for col in df.columns:
+        for col in cols:
             if col.strip().lower() == target.lower():
                 return col
     for target in possible_names:
-        for col in df.columns:
+        for col in cols:
             if target.lower() in col.strip().lower():
                 return col
     return None
@@ -162,12 +164,19 @@ def read_single_abs_file(file_path):
         else:
             return None, None
 
-        if df.empty:
+        if df is None or df.empty:
             return None, None
 
-        # Clean Header Row safely converting floats/NaNs to strings
+        # Clean all NaN/Null values immediately to prevent float issues
+        df = df.fillna("")
+
+        # Ensure all column names are plain strings
+        df.columns = [str(c).strip() for c in df.columns]
+
+        # Header adjustment safely treating cells as strings
         for idx in range(min(5, len(df))):
-            row_str = " ".join([str(val) for val in df.iloc[idx].values if pd.notna(val)]).lower()
+            row_vals = [str(v).strip() for v in df.iloc[idx].values if pd.notna(v) and str(v).strip() != ""]
+            row_str = " ".join(row_vals).lower()
             if any(
                 k in row_str
                 for k in [
@@ -180,11 +189,11 @@ def read_single_abs_file(file_path):
                 ]
             ):
                 if idx > 0:
-                    df.columns = df.iloc[idx].astype(str)
+                    df.columns = [str(v).strip() for v in df.iloc[idx].values]
                     df = df.iloc[idx + 1 :].reset_index(drop=True)
                 break
 
-        df.columns = df.columns.astype(str).str.strip()
+        df.columns = [str(c).strip() for c in df.columns]
 
         dist_keywords = [
             "distributor",
@@ -199,7 +208,7 @@ def read_single_abs_file(file_path):
         filename_lower = filename.lower()
         filename_match = any(k in filename_lower for k in dist_keywords)
 
-        cols_lower = [c.lower() for c in df.columns]
+        cols_lower = [str(c).lower() for c in df.columns]
         column_match = any(
             c in cols_lower
             for c in [
@@ -230,7 +239,7 @@ def read_single_abs_file(file_path):
         return None, None
 
 
-@st.cache_data
+@st.cache_data(ttl=300)
 def read_current_disk_data():
     distributor_dfs = []
     parts_dfs = []
@@ -283,7 +292,7 @@ if not raw_dist_df.empty:
                 "DEALER",
             ],
         )
-        or raw_dist_df.columns[0]
+        or str(raw_dist_df.columns[0])
     )
     c_loc = get_col_by_exact_or_alias(
         raw_dist_df, ["LOCATION", "CITY", "ADDRESS", "STATE", "PLACE"]
@@ -354,9 +363,9 @@ if not raw_dist_df.empty:
         key = clean_key(row["DISTRIBUTOR NAME"])
         if key and key not in dist_lookup_map:
             dist_lookup_map[key] = {
-                "LOCATION": row["LOCATION"],
-                "CONTACT": row["_CONTACT"],
-                "PART ORIGIN": row["PART ORIGIN"],
+                "LOCATION": str(row["LOCATION"]),
+                "CONTACT": str(row["_CONTACT"]),
+                "PART ORIGIN": str(row["PART ORIGIN"]),
             }
 
 # Process Parts Data
@@ -377,7 +386,7 @@ if not raw_parts_df.empty:
                 "SKU",
             ],
         )
-        or raw_parts_df.columns[0]
+        or str(raw_parts_df.columns[0])
     )
     col_pname = get_col_by_exact_or_alias(
         raw_parts_df,
@@ -475,18 +484,11 @@ def extract_field_values(df, col_name, field_type):
     all_vals = set()
     unique_series = df[col_name].dropna().unique()
 
-    if field_type in ["DISTRIBUTOR NAME", "LOCATION", "BRAND"]:
-        for v in unique_series:
-            items = split_multivalue_string(v)
-            for item in items:
-                if item and item.lower() not in ["n/a", "nan", "none", ""]:
-                    all_vals.add(item)
-    elif field_type in ["CATEGORY", "TYPE", "PART ORIGIN"]:
-        for val in unique_series:
-            items = split_multivalue_string(val)
-            for item in items:
-                if item.lower() not in ["n/a", "nan", "none"]:
-                    all_vals.add(item)
+    for v in unique_series:
+        items = split_multivalue_string(v)
+        for item in items:
+            if item and item.lower() not in ["n/a", "nan", "none", ""]:
+                all_vals.add(item)
 
     return sorted(list(all_vals))
 
@@ -494,7 +496,7 @@ def extract_field_values(df, col_name, field_type):
 def to_excel(df):
     output = io.BytesIO()
     clean_export = df.drop(
-        columns=[c for c in df.columns if c.startswith("_")], errors="ignore"
+        columns=[c for c in df.columns if str(c).startswith("_")], errors="ignore"
     )
     with pd.ExcelWriter(output, engine="openpyxl") as writer:
         clean_export.to_excel(writer, index=False, sheet_name="Lookup_Results")
@@ -560,7 +562,7 @@ def build_filtered_df(df, exclude=None):
     if "brands" not in exclude and st.session_state["sel_brands"]:
         pattern = (
             r"\b(?:"
-            + "|".join([re.escape(b) for b in st.session_state["sel_brands"]])
+            + "|".join([re.escape(str(b)) for b in st.session_state["sel_brands"]])
             + r")\b"
         )
         if "BRAND" in temp.columns:
@@ -577,7 +579,7 @@ def build_filtered_df(df, exclude=None):
     ):
         pattern = (
             r"\b(?:"
-            + "|".join([re.escape(c) for c in st.session_state["sel_categories"]])
+            + "|".join([re.escape(str(c)) for c in st.session_state["sel_categories"]])
             + r")\b"
         )
         temp = temp[
@@ -593,7 +595,7 @@ def build_filtered_df(df, exclude=None):
     ):
         pattern = (
             r"\b(?:"
-            + "|".join([re.escape(t) for t in st.session_state["sel_types"]])
+            + "|".join([re.escape(str(t)) for t in st.session_state["sel_types"]])
             + r")\b"
         )
         temp = temp[
@@ -609,7 +611,7 @@ def build_filtered_df(df, exclude=None):
     ):
         pattern = (
             r"\b(?:"
-            + "|".join([re.escape(o) for o in st.session_state["sel_origins"]])
+            + "|".join([re.escape(str(o)) for o in st.session_state["sel_origins"]])
             + r")\b"
         )
         temp = temp[
@@ -777,7 +779,7 @@ else:
 
     if search_query.strip() and not results_to_show.empty:
         query = search_query.strip().lower()
-        search_cols = [c for c in results_to_show.columns if not c.startswith("_")]
+        search_cols = [c for c in results_to_show.columns if not str(c).startswith("_")]
         mask = results_to_show[search_cols].apply(
             lambda row: row.astype(str)
             .str.lower()
