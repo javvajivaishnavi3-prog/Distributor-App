@@ -165,9 +165,9 @@ def read_single_abs_file(file_path):
         if df.empty:
             return None, None
 
-        # Clean Header Row
+        # Clean Header Row safely converting floats/NaNs to strings
         for idx in range(min(5, len(df))):
-            row_str = " ".join(df.iloc[idx].astype(str).values).lower()
+            row_str = " ".join([str(val) for val in df.iloc[idx].values if pd.notna(val)]).lower()
             if any(
                 k in row_str
                 for k in [
